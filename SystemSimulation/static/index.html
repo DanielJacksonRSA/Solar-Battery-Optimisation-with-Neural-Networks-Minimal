@@ -1,0 +1,302 @@
+<!--
+  Copyright (c) 2026 Daniel Jackson and Nelson Mandela University. All rights reserved.
+  This code is proprietary. It may not be used, copied, modified, distributed or
+  reused in whole or in part, nor may the ideas it embodies be used, without the
+  prior written permission of the copyright holders. See LICENSE.
+-->
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Solar/Battery System Simulation</title>
+  <link rel="stylesheet" href="/styles.css?v=5" />
+  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+</head>
+<body>
+  <header>
+    <div class="logo-badge">&#9889;</div>
+    <div>
+      <h1>Solar/Battery System Simulation</h1>
+      <p>Input data &rarr; models &rarr; comparison</p>
+    </div>
+  </header>
+  <div id="layout">
+    <div class="setup-col" id="setup-col">
+      <div class="setup-header">
+        <span class="setup-title">Setup</span>
+        <button id="setup-toggle" class="collapse-btn" title="Collapse setup">&#10094;</button>
+      </div>
+      <div class="setup-body" id="setup-body">
+        <div class="panel">
+          <h2>Dataset</h2>
+          <label for="dataset-select">Site</label>
+          <select id="dataset-select"></select>
+          <label for="bldg-select">Building</label>
+          <select id="bldg-select"></select>
+          <label for="start-date">Start date</label>
+          <input type="date" id="start-date" />
+          <label for="end-date">End date</label>
+          <input type="date" id="end-date" />
+        </div>
+
+        <div class="panel">
+          <h2>Solar model</h2>
+          <label for="solar-version">Version</label>
+          <select id="solar-version"></select>
+          <label for="solar-run">Run</label>
+          <select id="solar-run"></select>
+        </div>
+
+        <div class="panel">
+          <h2>Load model</h2>
+          <label for="load-version">Version</label>
+          <select id="load-version"><option value="">(none available &mdash; use ground truth)</option></select>
+          <label for="load-run">Run</label>
+          <select id="load-run"></select>
+        </div>
+
+        <div class="panel">
+          <h2>Management model</h2>
+          <label for="management-version">Version</label>
+          <select id="management-version"></select>
+          <label for="management-run">Run</label>
+          <select id="management-run"></select>
+        </div>
+
+        <div class="panel">
+          <h2>Battery</h2>
+          <label for="capacity-wh">Capacity (Wh)</label>
+          <input type="number" id="capacity-wh" value="10000" />
+          <label for="shutoff-pct">Shutoff floor (%)</label>
+          <input type="number" id="shutoff-pct" value="20" />
+          <label for="max-discharge-w">Max discharge (W)</label>
+          <input type="number" id="max-discharge-w" value="10000" />
+          <label for="round-trip-efficiency">Inverter/battery efficiency (%)</label>
+          <input type="number" id="round-trip-efficiency" value="92" />
+          <label for="installed-capacity-kw">Installed PV capacity (kW)</label>
+          <input type="number" id="installed-capacity-kw" value="8.8" />
+        </div>
+
+        <div class="panel">
+          <h2>Tariff &amp; loadshedding</h2>
+          <div id="tariff-display">
+            <div class="tariff-head">
+              <span id="tariff-schedule">Loading tariff&hellip;</span>
+              <span id="tariff-meta" class="hint"></span>
+            </div>
+            <div class="tariff-rows-head">
+              <span>Band</span>
+              <span>Import / Export (R/kWh)</span>
+            </div>
+            <div id="tariff-table" class="tariff-rows"></div>
+            <p class="hint" id="tariff-note"></p>
+          </div>
+
+          <label class="checkbox-row" for="loadshedding-enabled">
+            <input type="checkbox" id="loadshedding-enabled" checked />
+            Enable loadshedding
+          </label>
+          <label for="loadshedding-stage">Stage</label>
+          <select id="loadshedding-stage">
+            <option value="">Random per day (mix of stages)</option>
+            <option value="1">Stage 1 &mdash; ~1 000MW shed; ~2-6h/day without power</option>
+            <option value="2">Stage 2 &mdash; ~2 000MW shed; roughly double Stage 1</option>
+            <option value="3">Stage 3 &mdash; ~3 000MW shed; up to 3 outage blocks/day</option>
+            <option value="4">Stage 4 &mdash; ~4 000MW shed (worst case modeled); ~6-8h/day</option>
+          </select>
+          <p class="hint">
+            Modeled on staged national load-shedding: each stage sheds roughly 1 000MW more than the
+            last, in more/longer blocks per day. Real stages run to 8, but this system's
+            The management model was only trained against stages 0&ndash;4 (4 standing in for the worst
+            realistic case), so higher stages aren't offered here.
+          </p>
+        </div>
+
+        <button id="run-button">Run Simulation</button>
+        <div id="status"></div>
+        <a id="csv-link" class="csv-link" style="display:none" target="_blank">&#8681;&nbsp;Download run CSV</a>
+      </div>
+    </div>
+
+    <div>
+      <div class="panel">
+        <h2>Playback</h2>
+        <div id="playback-controls">
+          <button id="play-pause" class="icon-btn">&#9654;</button>
+          <select id="speed-select">
+            <option value="1">1&times;</option>
+            <option value="10" selected>10&times;</option>
+            <option value="50">50&times;</option>
+            <option value="1000">Instant</option>
+          </select>
+          <input type="range" id="scrub" min="0" max="0" value="0" />
+          <span id="clock">&mdash;</span>
+        </div>
+      </div>
+
+      <div class="grid-2">
+      <div class="panel">
+        <h2>Live System Flow</h2>
+        <div class="flow-wrap">
+          <svg id="flow-svg" viewBox="0 0 400 400" class="flow-svg" aria-hidden="true">
+            <defs>
+              <radialGradient id="grad-solar" cx="35%" cy="30%" r="75%">
+                <stop offset="0%" stop-color="#fcd34d"></stop>
+                <stop offset="100%" stop-color="#f59e0b"></stop>
+              </radialGradient>
+              <radialGradient id="grad-battery" cx="35%" cy="30%" r="75%">
+                <stop offset="0%" stop-color="#34d399"></stop>
+                <stop offset="100%" stop-color="#059669"></stop>
+              </radialGradient>
+              <radialGradient id="grad-grid" cx="35%" cy="30%" r="75%">
+                <stop offset="0%" stop-color="#60a5fa"></stop>
+                <stop offset="100%" stop-color="#2563eb"></stop>
+              </radialGradient>
+              <radialGradient id="grad-load" cx="35%" cy="30%" r="75%">
+                <stop offset="0%" stop-color="#a78bfa"></stop>
+                <stop offset="100%" stop-color="#7c3aed"></stop>
+              </radialGradient>
+              <radialGradient id="grad-inverter" cx="35%" cy="30%" r="80%">
+                <stop offset="0%" stop-color="#3b4256"></stop>
+                <stop offset="100%" stop-color="#1a1d29"></stop>
+              </radialGradient>
+              <filter id="node-shadow" x="-60%" y="-60%" width="220%" height="220%">
+                <feDropShadow dx="0" dy="3" stdDeviation="5" flood-color="#0f172a" flood-opacity="0.22"></feDropShadow>
+              </filter>
+              <filter id="inverter-glow" x="-100%" y="-100%" width="300%" height="300%">
+                <feGaussianBlur stdDeviation="9" result="blur"></feGaussianBlur>
+                <feMerge>
+                  <feMergeNode in="blur"></feMergeNode>
+                  <feMergeNode in="SourceGraphic"></feMergeNode>
+                </feMerge>
+              </filter>
+
+              <marker id="arrow-solar" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+                <path d="M0,0 L10,5 L0,10 z" class="arrow-fill solar"></path>
+              </marker>
+              <marker id="arrow-battery" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+                <path d="M0,0 L10,5 L0,10 z" class="arrow-fill battery"></path>
+              </marker>
+              <marker id="arrow-grid" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+                <path d="M0,0 L10,5 L0,10 z" class="arrow-fill grid"></path>
+              </marker>
+              <marker id="arrow-load" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+                <path d="M0,0 L10,5 L0,10 z" class="arrow-fill load"></path>
+              </marker>
+            </defs>
+
+            <circle class="inverter-halo" cx="200" cy="200" r="58"></circle>
+
+            <path id="flow-solar" class="flow-line solar" marker-end="url(#arrow-solar)"></path>
+            <path id="flow-battery" class="flow-line battery" marker-end="url(#arrow-battery)"></path>
+            <path id="flow-grid" class="flow-line grid" marker-end="url(#arrow-grid)"></path>
+            <path id="flow-load" class="flow-line load" marker-end="url(#arrow-load)"></path>
+
+            <!-- Solar node: sun glyph -->
+            <g class="flow-node" id="flow-solar-node" transform="translate(200,60)" filter="url(#node-shadow)">
+              <circle r="32" fill="url(#grad-solar)"></circle>
+              <g class="node-icon" stroke="#fff" stroke-width="2" stroke-linecap="round" fill="none">
+                <circle r="6.5" fill="#fff" stroke="none"></circle>
+                <line x1="0" y1="-10" x2="0" y2="-14"></line>
+                <line x1="0" y1="10" x2="0" y2="14"></line>
+                <line x1="-10" y1="0" x2="-14" y2="0"></line>
+                <line x1="10" y1="0" x2="14" y2="0"></line>
+                <line x1="-7" y1="-7" x2="-10" y2="-10"></line>
+                <line x1="7" y1="7" x2="10" y2="10"></line>
+                <line x1="-7" y1="7" x2="-10" y2="10"></line>
+                <line x1="7" y1="-7" x2="10" y2="-10"></line>
+              </g>
+            </g>
+            <text class="node-title" x="200" y="14">Solar</text>
+
+            <!-- Grid node: plug/bolt glyph -->
+            <g class="flow-node" id="flow-grid-node" transform="translate(340,200)" filter="url(#node-shadow)">
+              <circle r="32" fill="url(#grad-grid)"></circle>
+              <path class="node-icon" d="M1,-13 L-8,2 L-1,2 L-3,13 L9,-3 L2,-3 Z" fill="#fff"></path>
+            </g>
+            <text class="node-title" x="340" y="248">Grid</text>
+
+            <!-- Load node: house glyph -->
+            <g class="flow-node" id="flow-load-node" transform="translate(200,340)" filter="url(#node-shadow)">
+              <circle r="32" fill="url(#grad-load)"></circle>
+              <g class="node-icon" fill="none" stroke="#fff" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round">
+                <path d="M-11,2 L0,-9 L11,2"></path>
+                <path d="M-7,1 L-7,11 L7,11 L7,1"></path>
+              </g>
+            </g>
+            <text class="node-title" x="200" y="392">Load</text>
+
+            <!-- Battery node -->
+            <g class="flow-node" id="flow-battery-node" transform="translate(60,200)" filter="url(#node-shadow)">
+              <circle r="32" fill="url(#grad-battery)"></circle>
+              <g class="node-icon">
+                <rect x="-12" y="-7" width="21" height="14" rx="2.5" fill="none" stroke="#fff" stroke-width="2"></rect>
+                <rect x="10" y="-3" width="3" height="6" rx="1" fill="#fff"></rect>
+                <rect id="flow-battery-fill" x="-10" y="-5" width="10" height="10" rx="1" fill="#fff"></rect>
+              </g>
+            </g>
+            <text class="node-title" x="60" y="154">Battery</text>
+            <text class="node-sub" id="flow-battery-soc" x="60" y="246">--%</text>
+
+            <!-- Inverter hub -->
+            <g class="flow-node inverter" id="flow-inverter-node" transform="translate(200,200)" filter="url(#inverter-glow)">
+              <circle r="44" fill="url(#grad-inverter)"></circle>
+              <circle r="44" class="inverter-ring"></circle>
+              <g class="node-icon" stroke="#fff" stroke-width="2.4" stroke-linecap="round" fill="none">
+                <line x1="0" y1="-15" x2="0" y2="-4"></line>
+                <path d="M-9,-6 A11,11 0 1 0 9,-6"></path>
+              </g>
+            </g>
+            <text class="node-title-inv" x="200" y="256">Inverter</text>
+          </svg>
+          <div class="flow-legend">
+            <div class="flow-label">
+              <div class="flow-label-head"><span class="dot solar"></span>Solar</div>
+              <div class="flow-row"><span>Actual</span><b id="label-solar">0 W</b></div>
+              <div class="flow-row pred"><span>Predicted</span><b id="label-solar-pred">0 W</b></div>
+            </div>
+            <div class="flow-label">
+              <div class="flow-label-head"><span class="dot battery"></span>Battery</div>
+              <div class="flow-row"><span>Actual</span><b id="label-battery">0 W</b></div>
+              <div class="flow-row pred"><span>Predicted</span><b id="label-battery-pred">0 W</b></div>
+            </div>
+            <div class="flow-label">
+              <div class="flow-label-head"><span class="dot grid"></span>Grid</div>
+              <div class="flow-row"><span>Actual</span><b id="label-grid">0 W</b></div>
+              <div class="flow-row pred"><span>Predicted</span><b id="label-grid-pred">0 W</b></div>
+            </div>
+            <div class="flow-label">
+              <div class="flow-label-head"><span class="dot load"></span>Load</div>
+              <div class="flow-row"><span>Actual</span><b id="label-load">0 W</b></div>
+              <div class="flow-row pred"><span>Predicted</span><b id="label-load-pred">0 W</b></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>Summary</h2>
+        <div class="summary-grid" id="summary-grid"></div>
+      </div>
+      </div>
+
+      <div class="grid-2 charts-grid">
+        <div class="panel plot-panel wide"><div id="plot-dayplan" class="plot"></div></div>
+        <div class="panel plot-panel"><div id="plot-solar" class="plot"></div></div>
+        <div class="panel plot-panel"><div id="plot-load" class="plot"></div></div>
+        <div class="panel plot-panel"><div id="plot-grid" class="plot"></div></div>
+        <div class="panel plot-panel wide"><div id="plot-cost" class="plot"></div></div>
+        <div class="panel plot-panel"><div id="plot-daily-savings" class="plot"></div></div>
+        <div class="panel plot-panel"><div id="plot-monthly-savings" class="plot"></div></div>
+      </div>
+    </div>
+  </div>
+  <div id="fullscreen-modal" class="fullscreen-modal hidden">
+    <div class="fullscreen-modal-inner">
+      <button id="fullscreen-close" class="collapse-btn fullscreen-close" title="Close">&times;</button>
+      <div id="fullscreen-plot" class="fullscreen-plot"></div>
+    </div>
+  </div>
+  <script src="/app.js?v=5"></script>
+</body>
+</html>
